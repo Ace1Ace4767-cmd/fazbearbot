@@ -2,22 +2,29 @@ import discord
 import os
 from discord.ext import commands
 from discord.ui import Button, View, Modal, InputText
+from flask import Flask
+from threading import Thread
 
-# Configuration Storage
-config = {
-    "app_channel": None,
-    "results_channel": None,
-    "log_channel": None,
-    "staff_role_id": None
-}
+# --- DUMMY WEB SERVER FOR RENDER FREE TIER ---
+app = Flask('')
+@app.route('/')
+def home():
+    return "Fazbear Bot is Online!"
 
+def run_web():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run_web)
+    t.start()
+
+# --- BOT LOGIC ---
+config = {"app_channel": None, "results_channel": None, "log_channel": None, "staff_role_id": None}
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
-
 bot = commands.Bot(intents=intents)
 
-# --- APPLICATION MODAL ---
 class AppModal(Modal):
     def __init__(self) -> None:
         super().__init__(title="Lifesteal Fazbear Application")
@@ -29,33 +36,21 @@ class AppModal(Modal):
 
     async def callback(self, interaction: discord.Interaction):
         if not config["results_channel"]:
-            return await interaction.response.send_message("❌ Results channel is not configured.", ephemeral=True)
-
+            return await interaction.response.send_message("❌ Results channel not set.", ephemeral=True)
         results_chan = bot.get_channel(config["results_channel"])
         username_val = self.children[0].value
-        
-        # Professional Clean Embed for Staff
         embed = discord.Embed(title="New Application Submitted", color=0x2b2d31)
         embed.set_author(name=f"Applicant: {username_val}", icon_url=interaction.user.display_avatar.url)
-        
-        # Added the User Mention here
         embed.description = f"**Discord Account:** {interaction.user.mention}\n**Account ID:** `{interaction.user.id}`"
-        
-        embed.add_field(name="**Why join Fazbear?**", value=f"```\n{self.children[1].value}\n```", inline=False)
+        embed.add_field(name="**Why join?**", value=f"```\n{self.children[1].value}\n```", inline=False)
         embed.add_field(name="**Skills**", value=f"```\n{self.children[2].value}\n```", inline=False)
-        embed.add_field(name="**What can they offer?**", value=f"```\n{self.children[3].value}\n```", inline=True)
+        embed.add_field(name="**Offer**", value=f"```\n{self.children[3].value}\n```", inline=True)
         embed.add_field(name="**Why accept?**", value=f"```\n{self.children[4].value}\n```", inline=True)
-        
-        embed.set_footer(text="Lifesteal Fazbear • Voting in Progress")
-
         view = AdminDecisionView(target_user=interaction.user, target_username=username_val)
         msg = await results_chan.send(embed=embed, view=view)
-        
-        # Staff voting reactions
         await msg.add_reaction("✅")
         await msg.add_reaction("❌")
-
-        await interaction.response.send_message("✅ Your application has been sent to the staff team.", ephemeral=True)
+        await interaction.response.send_message("✅ Application sent.", ephemeral=True)
 
 class AdminDecisionView(View):
     def __init__(self, target_user, target_username):
@@ -73,76 +68,45 @@ class AdminDecisionView(View):
 
     async def process_decision(self, interaction, status, color):
         if config["staff_role_id"] not in [role.id for role in interaction.user.roles]:
-            return await interaction.response.send_message("❌ You do not have the required staff role.", ephemeral=True)
-
-        if not config["log_channel"]:
-            return await interaction.response.send_message("❌ Log channel is not configured.", ephemeral=True)
-        
+            return await interaction.response.send_message("❌ No permission.", ephemeral=True)
         log_chan = bot.get_channel(config["log_channel"])
-        
-        # Log formatting: (username) Has been accepted/denied + mention
-        log_embed = discord.Embed(
-            description=f"**{self.target_username}** ({self.target_user.mention}) Has been {status.lower()}", 
-            color=color
-        )
-        log_embed.set_footer(text=f"Decision by: {interaction.user.display_name}")
-        
+        log_embed = discord.Embed(description=f"**{self.target_username}** ({self.target_user.mention}) Has been {status.lower()}", color=color)
         await log_chan.send(embed=log_embed)
-        
-        for item in self.children:
-            item.disabled = True
+        for item in self.children: item.disabled = True
         await interaction.message.edit(view=self)
-        await interaction.response.send_message(f"Application {status}.", ephemeral=True)
+        await interaction.response.send_message(f"Status: {status}.", ephemeral=True)
 
 class ApplyStartView(View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
+    def __init__(self): super().__init__(timeout=None)
     @discord.ui.button(label="Apply", style=discord.ButtonStyle.blurple, emoji="📝", custom_id="main_apply")
     async def apply_btn(self, button: Button, interaction: discord.Interaction):
         await interaction.response.send_modal(AppModal())
 
-# --- COMMANDS ---
-
-setup = bot.create_group("setup", "Configure the application system", default_member_permissions=discord.Permissions(administrator=True))
-
-@setup.command(name="role", description="Set the staff role allowed to accept or deny applications.")
+setup = bot.create_group("setup", "Configure system", default_member_permissions=discord.Permissions(administrator=True))
+@setup.command(name="role")
 async def setup_role(ctx, role: discord.Role):
     config["staff_role_id"] = role.id
-    await ctx.respond(f"✅ Staff role set to: `{role.name}`")
-
-@setup.command(name="channel", description="Set the channel where the apply button will be posted.")
+    await ctx.respond(f"✅ Role set: `{role.name}`")
+@setup.command(name="channel")
 async def setup_app_chan(ctx, channel: discord.TextChannel):
     config["app_channel"] = channel.id
-    await ctx.respond(f"✅ Application channel set to {channel.mention}")
-
-@setup.command(name="results", description="Set the staff channel where applications are sent for review.")
+    await ctx.respond(f"✅ App channel: {channel.mention}")
+@setup.command(name="results")
 async def setup_res_chan(ctx, channel: discord.TextChannel):
     config["results_channel"] = channel.id
-    await ctx.respond(f"✅ Staff results channel set to {channel.mention}")
-
-@setup.command(name="logs", description="Set the channel where the final accept/deny logs are posted.")
+    await ctx.respond(f"✅ Results channel: {channel.mention}")
+@setup.command(name="logs")
 async def setup_log_chan(ctx, channel: discord.TextChannel):
     config["log_channel"] = channel.id
-    await ctx.respond(f"✅ Log channel set to {channel.mention}")
-
-@bot.slash_command(name="post", description="Sends the recruitment message to the configured channel.", default_member_permissions=discord.Permissions(administrator=True))
+    await ctx.respond(f"✅ Log channel: {channel.mention}")
+@bot.slash_command(name="post")
 async def post_msg(ctx):
-    if not config["app_channel"]:
-        return await ctx.respond("❌ Set the application channel first using `/setup channel`.")
-    
     channel = bot.get_channel(config["app_channel"])
-    embed = discord.Embed(
-        title="Lifesteal Fazbear Applications",
-        description="Click the button below to start your application process.",
-        color=0x992d22
-    )
+    embed = discord.Embed(title="Lifesteal Fazbear Applications", description="Click to apply.", color=0x992d22)
     await channel.send(embed=embed, view=ApplyStartView())
-    await ctx.respond("🚀 Recruitment message posted.")
+    await ctx.respond("🚀 Posted.")
 
-# Render environment variable
-token = os.getenv("BOT_TOKEN")
-if token:
+if __name__ == "__main__":
+    keep_alive() # Start the dummy web server
+    token = os.getenv("BOT_TOKEN")
     bot.run(token)
-else:
-    print("TOKEN NOT FOUND")
